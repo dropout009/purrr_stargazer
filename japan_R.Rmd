@@ -1,0 +1,214 @@
+---
+title: "purrrとstargazerによる回帰結果の出力"
+author: "Morishita"
+date: "2017-12-02"
+output: 
+    ioslides_presentation:
+        smaller: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = T,
+    message = F,
+    warning = F,
+    cache = F
+    )
+```
+
+
+
+
+## モチベーション
+
+- 論文やレポートに分析結果を綺麗に出力したい 
+
+- 複数の回帰結果をまとめて扱いたい
+
+
+## 使用するデータ
+
+```{r}
+library(tidyverse)
+library(gapminder)
+
+gapminder = gapminder %>% 
+    mutate(pop = as.double(pop))
+
+gapminder
+```
+
+
+
+
+## stargazerパッケージ
+
+
+- rmdでhtmlとして出力するときは`results='asis'`にする
+- `type = "latex"`とするとtex形式で，`"text"`とするとコンソール上で見やすい形に出力できる
+
+```{r, results='asis'}
+library(stargazer)
+
+gapminder %>% 
+    lm(lifeExp ~ year + pop + gdpPercap, data = .) %>% 
+    stargazer(type = "html")
+```
+
+<!-- ## 期待寿命の経年変化 -->
+
+<!-- ```{r, fig.height=4} -->
+<!-- library(viridis) -->
+
+<!-- gapminder %>%  -->
+<!--     ggplot(aes(year, lifeExp, group = country, color = continent)) + -->
+<!--     geom_point() + geom_smooth(method = "lm", se = F) + -->
+<!--     theme(legend.position  = "none") + scale_color_viridis(discrete = T) -->
+<!-- ``` -->
+
+<!-- ## 期待寿命と人口 -->
+
+<!-- ```{r, fig.height=4} -->
+<!-- gapminder %>%  -->
+<!--     ggplot(aes(pop, lifeExp, group = country, color = continent)) + -->
+<!--     geom_point() + geom_smooth(method = "lm", se = F) + -->
+<!--     theme(legend.position  = "none") + scale_color_viridis(discrete = T) -->
+<!-- ``` -->
+
+
+<!-- ## 期待寿命とGDP -->
+
+<!-- ```{r, fig.height=4} -->
+<!-- gapminder %>%  -->
+<!--     ggplot(aes(gdpPercap, lifeExp, group = country, color = continent)) + -->
+<!--     geom_point() + geom_smooth(method = "lm", se = F) + -->
+<!--     theme(legend.position  = "none") + scale_color_viridis(discrete = T) -->
+<!-- ``` -->
+
+
+## 国レベルでデータをネスト
+```{r}
+gapminder = gapminder %>% 
+    mutate_if(is.factor, as.character)
+
+by_country = gapminder %>% 
+    group_by(continent, country) %>% 
+    nest()
+
+by_country
+```
+
+## 国ごとに回帰
+```{r}
+library(sandwich)
+
+lin_reg = function(data) {glm(lifeExp ~ year + pop + gdpPercap, data = data)}
+het_se = function(reg) {reg %>% vcovHC() %>% sqrt() %>% diag()}
+
+by_country_with_reg = by_country %>% 
+    mutate(reg = map(data, lin_reg), se = map(reg, het_se))
+
+by_country_with_reg
+```
+
+<!-- ## -->
+
+<!-- ```{r} -->
+<!-- by_country_with_reg$reg[1] -->
+<!-- by_country_with_reg$se[1] -->
+<!-- ``` -->
+
+
+## 複数の回帰結果を一気に出力
+```{r, results='asis'}
+library(magrittr)
+
+by_country_with_reg %>% 
+    slice(1:8) %$% 
+    stargazer(reg, se = se, type = "html")
+```
+
+
+## stargazerのオプション例
+
+```{r, results='asis'}
+by_country_with_reg %>% 
+    slice(1:8) %$% 
+    stargazer(reg, se = se, type = "html",
+        covariate.labels = c("Year", "Population", "GdpPerCap"),
+        omit.stat = c("ll", "aic"), omit.table.layout = "bl",
+        add.lines = list(c("Continent", continent), c("Country", country)))
+```
+
+
+## 異なる水準でネストする場合
+
+```{r}
+by_continent = gapminder %>% 
+    group_by(continent) %>% 
+    nest() %>% 
+    add_column(country = "All")
+
+by_country_with_continent = by_continent %>% 
+    bind_rows(by_country) %>% 
+    mutate(reg = map(data, lin_reg), se = map(reg, het_se))
+
+by_country_with_continent
+```
+
+## 回帰結果
+```{r, results='asis'}
+by_country_with_continent %>% 
+    slice(1:8) %$% 
+    stargazer(reg, se = se, type = "html",
+        covariate.labels = c("Year", "Population", "GdpPerCap"),
+        omit.stat = c("ll", "aic"), omit.table.layout = "bl",
+        add.lines = list(c("Continent", continent), c("Country", country)))
+```
+
+
+
+## 異なるモデルを当てはめる場合
+```{r}
+lin_reg2 = function(data) {glm(lifeExp ~ year*pop*gdpPercap, data = data)}
+
+by_continent_with_reg = by_continent %>% 
+    mutate(reg1 = map(data, lin_reg), reg2 = map(data, lin_reg2)) %>% 
+    gather("model", "reg", starts_with("reg")) %>% 
+    mutate(se = map(reg, het_se)) %>% 
+    arrange(continent, model)
+
+by_continent_with_reg
+```
+
+## 回帰結果
+```{r, results='asis'}
+by_continent_with_reg %>% slice(1:8) %$% 
+    stargazer(reg, se = se, type = "html",
+        covariate.labels = c("Year", "Population", "GdpPerCap",
+            "Year * Pop", "Year * GdpPerCap", "Pop * GdpPerCap",
+            "Year * Pop * GdpPerCap"),
+        omit.stat = c("ll", "aic"), omit.table.layout = "bl",
+        add.lines = list(c("Continent", continent), c("Model", model)))
+```
+
+
+## 要約統計量の出力
+
+```{r}
+library(desctable)
+
+stats_list = list(
+  "Mean" = is.factor ~ percent | (is.double ~ mean),
+  "SD"  = is.factor ~ NA | (is.double ~ sd)
+)
+
+gapminder %>%
+    select(-c(country, year)) %>%
+    filter(continent %in% c("Asia", "Europe")) %>%
+    group_by(continent) %>%
+    desctable(stats = stats_list) %>%
+    datatable()
+```
+
+
